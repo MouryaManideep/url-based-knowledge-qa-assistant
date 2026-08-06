@@ -1,1 +1,13 @@
- 
+.env
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+venv/
+.venv/
+env/
+*.log
+faiss_index/
+*.faiss
+*.idx
+.DS_Store
