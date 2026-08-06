@@ -92,10 +92,14 @@ if "db" not in st.session_state:
     # Try loading an existing FAISS index from disk when the app starts.
     st.session_state.db = get_faiss_index()
 
+# Header: App overview
+# Description: This app lets users add websites and PDFs, build a searchable knowledge base, and ask questions about the loaded content.
+
 # Main page title shown at the top of the app.
 st.title("URL-Based Intelligent QA Assistant")
 
-# Sidebar Configuration for user inputs and settings.
+# Header: Sidebar controls
+# Description: Collects API keys, search settings, URLs, PDFs, and build actions.
 with st.sidebar:
     st.header("⚙️ Configuration")
     
@@ -160,7 +164,8 @@ with st.sidebar:
         st.success("Database cleared!")
         st.rerun()
 
-# Process the knowledge base when the user clicks the build button.
+# Header: Build knowledge base
+# Description: Process the entered URLs and uploaded PDFs into searchable chunks.
 if build_db:
     # Split the multiline URL text into a clean list of links.
     urls = [u.strip() for u in urls_input.split("\n") if u.strip()]
@@ -207,9 +212,11 @@ if build_db:
     else:
         st.sidebar.info("No new documents or URLs were added.")
 
-# Tabs for Main View: Chat, Summarization, Document Sources
+# Header: Main content tabs
+# Description: Organize the app into source viewing, summaries, and chat.
 tab_chat, tab_summary, tab_sources = st.tabs(["💬 Chat Assistant", "📝 Summarization", "📚 Active Sources"])
 
+# Header: Active sources view
 with tab_sources:
     st.subheader("Currently Loaded Sources")
     
@@ -238,6 +245,7 @@ with tab_sources:
         else:
             st.info("No PDF files uploaded.")
 
+# Header: Summary view
 with tab_summary:
     st.subheader("Source Material Summary")
     if not st.session_state.db:
@@ -255,6 +263,7 @@ with tab_summary:
                 st.markdown("### 💡 Takeaways")
                 st.write(summaries["takeaways"])
 
+# Header: Chat view
 with tab_chat:
     # Display chat messages from history
     for message in st.session_state.chat_history:

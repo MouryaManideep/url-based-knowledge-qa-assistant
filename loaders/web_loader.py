@@ -12,6 +12,9 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 logger = setup_logger("web_loader")
 
+# Header: Web content loader
+# Description: Downloads a web page and prepares its HTML for cleaning and indexing.
+
 def load_url_content(url: str, timeout: int = 15) -> Optional[Dict[str, Any]]:
     """
     Fetches the content of a URL and extracts clean textual content,
