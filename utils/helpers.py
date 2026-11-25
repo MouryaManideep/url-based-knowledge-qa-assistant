@@ -1,3 +1,4 @@
+import hashlib
 import re
 from urllib.parse import urlparse
 from typing import List, Dict
@@ -6,12 +7,23 @@ from typing import List, Dict
 # Purpose: Shared utility functions for URL validation, text extraction, and chat export.
 
 def is_valid_url(url: str) -> bool:
-    """Validate if the string is a valid URL."""
+    """Validate HTTP(S) URL syntax; the loader separately checks network safety."""
     try:
-        result = urlparse(url)
-        return all([result.scheme, result.netloc])
-    except Exception:
+        result = urlparse(url.strip())
+        return (
+            result.scheme.lower() in {"http", "https"}
+            and bool(result.hostname)
+            and not result.username
+            and not result.password
+            and (result.port is None or 1 <= result.port <= 65535)
+        )
+    except (AttributeError, ValueError):
         return False
+
+
+def content_fingerprint(data: bytes) -> str:
+    """Return a stable SHA-256 fingerprint for binary document contents."""
+    return hashlib.sha256(data).hexdigest()
 
 def extract_urls(text: str) -> List[str]:
     """Extract all URLs from a block of text."""
@@ -56,4 +68,3 @@ def extract_text_content(content: any) -> str:
                 text_parts.append(part)
         return "".join(text_parts)
     return str(content)
-

@@ -78,7 +78,7 @@ from preprocessing.chunker import chunk_web_content, chunk_pdf_content
 from vectorstore.faiss_store import get_faiss_index, clear_faiss_index
 from rag.qa_chain import generate_answer
 from services.summarizer import get_summaries
-from utils.helpers import is_valid_url, export_chat_to_markdown
+from utils.helpers import is_valid_url, export_chat_to_markdown, content_fingerprint
 
 # Initialize session state so information stays available across Streamlit reruns.
 # This helps the app remember chat history, processed sources, and the FAISS database.
@@ -87,7 +87,7 @@ if "chat_history" not in st.session_state:
 if "processed_urls" not in st.session_state:
     st.session_state.processed_urls = set()
 if "processed_files" not in st.session_state:
-    st.session_state.processed_files = set()
+    st.session_state.processed_files = {}
 if "db" not in st.session_state:
     # Try loading an existing FAISS index from disk when the app starts.
     st.session_state.db = get_faiss_index()
@@ -194,14 +194,16 @@ if build_db:
     if uploaded_files:
         with st.spinner("Processing PDF Documents..."):
             for uploaded_file in uploaded_files:
-                if uploaded_file.name in st.session_state.processed_files:
+                file_bytes = uploaded_file.getvalue()
+                file_hash = content_fingerprint(file_bytes)
+                if file_hash in st.session_state.processed_files:
                     continue
                 # Load PDF from bytes
-                file_bytes = uploaded_file.read()
                 pages_data = load_pdf_content(file_bytes, uploaded_file.name)
                 chunks = chunk_pdf_content(pages_data, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
-                all_documents.extend(chunks)
-                st.session_state.processed_files.add(uploaded_file.name)
+                if chunks:
+                    all_documents.extend(chunks)
+                    st.session_state.processed_files[file_hash] = uploaded_file.name
                 
     if all_documents:
         with st.spinner("Generating embeddings & updating FAISS index..."):
@@ -240,7 +242,7 @@ with tab_sources:
     with col2:
         st.markdown("**PDF Documents:**")
         if st.session_state.processed_files:
-            for filename in st.session_state.processed_files:
+            for filename in st.session_state.processed_files.values():
                 st.markdown(f"- 📄 {filename}")
         else:
             st.info("No PDF files uploaded.")
@@ -363,4 +365,3 @@ with tab_chat:
             file_name="chat_history.md",
             mime="text/markdown"
         )
-
