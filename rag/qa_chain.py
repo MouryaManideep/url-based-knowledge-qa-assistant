@@ -5,6 +5,7 @@ from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from typing import List, Dict, Any, Tuple
 from langchain_core.documents import Document
 from rag.prompt import SYSTEM_PROMPT, HYBRID_SYSTEM_PROMPT, QA_TEMPLATE
+from rag.retrieval import semantic_search
 from utils.logger import setup_logger
 from utils.helpers import extract_text_content
 
@@ -35,7 +36,8 @@ def generate_answer(
     k: int = 5,
     strict: bool = True,
     temperature: float = 0.1,
-    search_type: str = "similarity"
+    search_type: str = "semantic_similarity",
+    min_similarity: float = 0.20,
 ) -> Tuple[str, List[Document]]:
     """
     Retrieves relevant chunks from FAISS, builds the conversation prompt including
@@ -44,13 +46,20 @@ def generate_answer(
     if not db:
         return "Knowledge base is empty. Please enter URLs or upload PDFs to construct the database.", []
         
-    logger.info(f"Retrieving top {k} documents using {search_type} search for query: {question}")
-    
-    # Retrieve the most relevant chunks from the FAISS vector store.
-    if search_type == "mmr":
-        retrieved_docs = db.max_marginal_relevance_search(question, k=k)
-    else:
-        retrieved_docs = db.similarity_search(question, k=k)
+    logger.info("Running %s semantic retrieval (top_k=%s, min_similarity=%s)", search_type, k, min_similarity)
+    retrieved_docs = semantic_search(
+        db=db,
+        query=question,
+        k=k,
+        min_similarity=min_similarity,
+        search_type=search_type,
+    )
+    if not retrieved_docs:
+        return (
+            "I couldn't find a sufficiently similar passage in the loaded sources. "
+            "Try rephrasing your question, lowering the minimum semantic similarity, or adding more relevant sources.",
+            [],
+        )
     
     # Format retrieved contexts
     context_str = ""
@@ -87,4 +96,3 @@ def generate_answer(
     except Exception as e:
         logger.error(f"Error invoking Gemini LLM: {str(e)}")
         return f"An error occurred while generating the answer: {str(e)}", retrieved_docs
-

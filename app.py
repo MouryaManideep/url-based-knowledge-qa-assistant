@@ -125,8 +125,22 @@ with st.sidebar:
     # Dynamic settings for RAG and LLM
     st.subheader("🤖 Model & RAG Settings")
     temperature = st.slider("Temperature", min_value=0.0, max_value=1.0, value=0.1, step=0.05, help="Lower value is more deterministic, higher is more creative.")
-    search_type = st.selectbox("Search Strategy", options=["similarity", "mmr"], index=0, format_func=lambda x: "Similarity Search" if x == "similarity" else "Max Marginal Relevance (MMR)")
+    search_type = st.selectbox(
+        "Semantic Search Strategy",
+        options=["semantic_similarity", "mmr"],
+        index=0,
+        format_func=lambda x: "Semantic Similarity" if x == "semantic_similarity" else "Semantic MMR (diverse results)",
+        help="Both options search embeddings, not exact keywords. MMR favors a diverse set of relevant passages.",
+    )
     top_k = st.slider("Retrieval Chunk Count (K)", min_value=1, max_value=15, value=5, step=1)
+    min_similarity = st.slider(
+        "Minimum semantic similarity",
+        min_value=0.0,
+        max_value=0.8,
+        value=0.20,
+        step=0.05,
+        help="Passages below this cosine-similarity estimate are ignored. Raise it to be stricter; lower it to retrieve broader matches.",
+    )
     
     st.subheader("✂️ Chunking Parameters")
     chunk_size = st.slider("Chunk Size (characters)", min_value=200, max_value=2000, value=800, step=100)
@@ -278,10 +292,13 @@ with tab_chat:
                         heading = cite.get("heading", "N/A")
                         page = cite.get("page", "")
                         page_str = f", Page {page}" if page else ""
+                        similarity = cite.get("semantic_similarity")
+                        similarity_str = f"Semantic match: {similarity:.0%}<br>" if isinstance(similarity, (int, float)) else ""
                         source = cite.get("source", "N/A")
                         st.markdown(
                             f"<div class='citation-card'>"
                             f"<strong>{title}</strong> (Section: {heading}{page_str})<br>"
+                            f"{similarity_str}"
                             f"Source: <a href='{source}' target='_blank'>{source}</a>"
                             f"</div>",
                             unsafe_allow_html=True
@@ -312,7 +329,8 @@ with tab_chat:
                         strict=strict_mode,
                         k=top_k,
                         temperature=temperature,
-                        search_type=search_type
+                        search_type=search_type,
+                        min_similarity=min_similarity,
                     )
                     
                     message_placeholder.markdown(answer)
@@ -326,9 +344,10 @@ with tab_chat:
                             seen_citations.add(key)
                             citations.append({
                                     "title": doc.metadata.get("title"),
-                                    "heading": doc.metadata.get("heading"),
-                                    "page": doc.metadata.get("page"),
-                                    "source": doc.metadata.get("source")
+                                "heading": doc.metadata.get("heading"),
+                                "page": doc.metadata.get("page"),
+                                "source": doc.metadata.get("source"),
+                                "semantic_similarity": doc.metadata.get("semantic_similarity"),
                             })
                             
                     # Show citations below answer
@@ -339,10 +358,13 @@ with tab_chat:
                                 heading = cite["heading"]
                                 page = cite["page"]
                                 page_str = f", Page {page}" if page else ""
+                                similarity = cite.get("semantic_similarity")
+                                similarity_str = f"Semantic match: {similarity:.0%}<br>" if isinstance(similarity, (int, float)) else ""
                                 source = cite["source"]
                                 st.markdown(
                                     f"<div class='citation-card'>"
                                     f"<strong>{title}</strong> (Section: {heading}{page_str})<br>"
+                                    f"{similarity_str}"
                                     f"Source: <a href='{source}' target='_blank'>{source}</a>"
                                     f"</div>",
                                     unsafe_allow_html=True

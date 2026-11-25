@@ -7,9 +7,10 @@ A Streamlit application that builds a local knowledge base from public web pages
 1. Add HTTP(S) URLs and/or upload PDF files in the Streamlit sidebar.
 2. The loaders fetch webpage HTML or extract PDF text page by page.
 3. Preprocessing cleans webpage content and splits text into overlapping chunks with source metadata.
-4. A local Sentence Transformers model embeds chunks; FAISS stores the vectors and their document metadata under `faiss_index/`.
-5. For a question, FAISS retrieves similar passages (similarity or MMR). The app sends those passages, the question, and chat context to Gemini.
-6. Streamlit displays the answer and source details. Retrieved-source citations are useful references, but do not guarantee that every answer statement is fully supported.
+4. A local Sentence Transformers model (`all-MiniLM-L6-v2`, normalized vectors) embeds chunks; FAISS stores the vectors and their document metadata under `faiss_index/`.
+5. For a question, FAISS performs dense semantic retrieval. The app can return the closest semantic matches or use maximal marginal relevance (MMR) to diversify them. A configurable minimum cosine-similarity estimate filters weak matches; the estimate is derived from squared L2 distance for normalized vectors.
+6. The app sends accepted passages, the question, and chat context to Gemini. Citations show the retrieval match score to help users inspect evidence quality.
+7. Streamlit displays the answer and source details. Retrieved-source citations are useful references, but do not guarantee that every answer statement is fully supported.
 
 ## Project layout
 
