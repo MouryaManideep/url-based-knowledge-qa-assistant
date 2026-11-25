@@ -1,6 +1,6 @@
 import hashlib
 import re
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 from typing import List, Dict
 
 # File: utils/helpers.py
@@ -13,6 +13,7 @@ def is_valid_url(url: str) -> bool:
         return (
             result.scheme.lower() in {"http", "https"}
             and bool(result.hostname)
+            and not re.search(r"\s", result.hostname)
             and not result.username
             and not result.password
             and (result.port is None or 1 <= result.port <= 65535)
@@ -34,6 +35,10 @@ def extract_urls(text: str) -> List[str]:
 
 def export_chat_to_markdown(history: List[Dict[str, str]]) -> str:
     """Format the conversation history into a markdown string."""
+    def escape_markdown(value: object) -> str:
+        text = str(value).replace("\r", " ").replace("\n", " ")
+        return re.sub(r"([\\`*_{}\[\]()#+.!|>])", r"\\\1", text)
+
     md_content = "# Chat History Export\n\n"
     for message in history:
         role = message.get("role", "Unknown").capitalize()
@@ -45,11 +50,15 @@ def export_chat_to_markdown(history: List[Dict[str, str]]) -> str:
             md_content += "**Citations:**\n"
             for cite in message["citations"]:
                 source = cite.get("source", "N/A")
-                title = cite.get("title", "N/A")
-                heading = cite.get("heading", "N/A")
+                title = escape_markdown(cite.get("title", "N/A"))
+                heading = escape_markdown(cite.get("heading", "N/A"))
                 page = cite.get("page", "")
                 page_str = f", Page {page}" if page else ""
-                md_content += f"- *{title}* (Section: {heading}{page_str}) - [Link]({source})\n"
+                if is_valid_url(str(source)):
+                    safe_source = quote(str(source), safe=":/?#[]@!$&'*,;=%")
+                    md_content += f"- *{title}* (Section: {heading}{page_str}) - [Link]({safe_source})\n"
+                else:
+                    md_content += f"- *{title}* (Section: {heading}{page_str}) - Source: {escape_markdown(source)}\n"
             md_content += "\n"
             
     return md_content

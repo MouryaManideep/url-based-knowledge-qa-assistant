@@ -20,11 +20,12 @@ def clean_html(html_content: str) -> List[Dict[str, Any]]:
     for tag in soup(unwanted_tags):
         tag.decompose()
         
-    # Also find and remove classes/ids that commonly represent ads/sidebars
-    for tag in soup.find_all(attrs={"class": re.compile(r"ad-|sidebar|footer|menu|navbar|nav|cookie", re.I)}):
-        tag.decompose()
-    for tag in soup.find_all(attrs={"id": re.compile(r"ad-|sidebar|footer|menu|navbar|nav", re.I)}):
-        tag.decompose()
+    # Match known boilerplate tokens, not broad substrings such as "nav" or "footer".
+    noise_token = re.compile(r"(^|[-_])(ad|ads|advertisement|advertising|sidebar|navbar|nav-bar|menu|cookie|consent)([-_]|$)", re.I)
+    for tag in list(soup.find_all(True)):
+        tokens = list(tag.get("class", [])) + [tag.get("id", "")]
+        if any(noise_token.search(str(token)) for token in tokens):
+            tag.decompose()
 
     sections = []
     current_heading = "Introduction"
@@ -34,7 +35,10 @@ def clean_html(html_content: str) -> List[Dict[str, Any]]:
     
     for element in body.find_all(["h1", "h2", "h3", "h4", "h5", "h6", "p", "li", "pre", "table"]):
         name = element.name
-        text = element.get_text().strip()
+        # Parent list/table elements already include their descendants' text.
+        if element.find_parent(["li", "table"]):
+            continue
+        text = element.get_text(" ", strip=True)
         if not text:
             continue
             
@@ -44,7 +48,7 @@ def clean_html(html_content: str) -> List[Dict[str, Any]]:
             # Format tables as pipe-separated content for better LLM retrieval reading
             rows = []
             for row in element.find_all("tr"):
-                cells = [cell.get_text().strip() for cell in row.find_all(["td", "th"])]
+                cells = [cell.get_text(" ", strip=True) for cell in row.find_all(["td", "th"])]
                 if any(cells):
                     rows.append(" | ".join(cells))
             if rows:
@@ -66,13 +70,8 @@ def clean_html(html_content: str) -> List[Dict[str, Any]]:
             
     # If sections is empty but there is text, fallback to getting all paragraph texts
     if not sections:
-        text = soup.get_text()
-        # Basic cleanup of multiple newlines
-        text = re.sub(r'\n+', '\n', text)
-        sections.append({
-            "text": text,
-            "heading": "General Content"
-        })
+        text = re.sub(r"\s+", " ", soup.get_text(" ", strip=True)).strip()
+        if text:
+            sections.append({"text": text, "heading": "General Content"})
         
     return sections
-

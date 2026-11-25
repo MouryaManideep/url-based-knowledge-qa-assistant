@@ -75,10 +75,10 @@ def generate_answer(
     sys_prompt = SYSTEM_PROMPT if strict else HYBRID_SYSTEM_PROMPT
     messages = [SystemMessage(content=sys_prompt)]
     
-    # Add chat history
-    for msg in chat_history:
+    # Keep only recent, bounded turns to limit prompt growth and stale instructions.
+    for msg in chat_history[-12:]:
         role = msg.get("role")
-        content = msg.get("content")
+        content = str(msg.get("content") or "")[:3000]
         if role == "user":
             messages.append(HumanMessage(content=content))
         elif role == "assistant":
@@ -94,5 +94,5 @@ def generate_answer(
         answer = extract_text_content(response.content)
         return str(answer), retrieved_docs
     except Exception as e:
-        logger.error(f"Error invoking Gemini LLM: {str(e)}")
-        return f"An error occurred while generating the answer: {str(e)}", retrieved_docs
+        logger.error("Gemini answer generation failed (%s).", type(e).__name__)
+        return "I couldn't generate an answer right now. Please check your Gemini configuration and try again.", retrieved_docs

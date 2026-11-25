@@ -10,7 +10,7 @@ A Streamlit application that builds a local knowledge base from public web pages
 4. A local Sentence Transformers model (`all-MiniLM-L6-v2`, normalized vectors) embeds chunks; FAISS stores the vectors and their document metadata under `faiss_index/`.
 5. For a question, FAISS performs dense semantic retrieval. The app can return the closest semantic matches or use maximal marginal relevance (MMR) to diversify them. A configurable minimum cosine-similarity estimate filters weak matches; the estimate is derived from squared L2 distance for normalized vectors.
 6. The app sends accepted passages, the question, and chat context to Gemini. Citations show the retrieval match score to help users inspect evidence quality.
-7. Streamlit displays the answer and source details. Retrieved-source citations are useful references, but do not guarantee that every answer statement is fully supported.
+7. Streamlit displays the answer and source details. Source metadata is rendered as plain text and only validated HTTP(S) sources become clickable links. Citations are useful references, but do not guarantee that every answer statement is fully supported.
 
 ## Project layout
 
@@ -49,7 +49,7 @@ Run the app:
 streamlit run app.py
 ```
 
-The first run downloads the embedding model. Gemini access is needed for answers and summaries. The local FAISS index is generated as content is ingested and can be cleared from the sidebar.
+The embedding model is downloaded when first needed. Gemini access is needed for answers and summaries. The local FAISS index is generated as content is ingested and can be cleared from the sidebar. PDFs are limited to 25 MB, 500 pages, and 5 million extracted characters.
 
 ## Tests
 
@@ -62,7 +62,8 @@ python -m unittest discover -s tests -v
 ## Security and limitations
 
 - URL ingestion accepts HTTP(S), validates DNS results and redirects, verifies TLS certificates, allows HTML only, and limits response size. Only ingest pages you are authorized to access. This is a basic server-side request forgery (SSRF) mitigation; DNS rebinding and hostile infrastructure cannot be ruled out in every deployment. Do not expose this app as a public multi-user service without a stronger egress/network policy.
-- The FAISS index is local generated data and is excluded from Git. Do not load index files from untrusted sources: LangChain's FAISS persistence uses pickle metadata.
+- The FAISS index is local generated data and is excluded from Git. New indexes use FAISS vector files with JSON document metadata; old indexes that contain pickle metadata are not loaded. Clear an old index and re-add its sources to use the safer format.
 - Embedding and retrieval are local. Prompts and retrieved content are sent to Google's Gemini API when answering or summarizing; review Google's applicable data terms before using confidential documents.
 - Scanned/image-only PDFs are not OCR processed. Web pages that require login or client-side rendering may not load.
+- Web URL checks reject non-public DNS addresses and validate redirects, but the loader does not pin a DNS resolution to the socket connection. Do not expose URL ingestion as a public server without network-level egress controls.
 - Strict-source prompting reduces unsupported answers but cannot guarantee zero hallucinations. Verify important answers against the original source.

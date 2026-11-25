@@ -75,10 +75,30 @@ from loaders.web_loader import load_url_content
 from loaders.pdf_loader import load_pdf_content
 from preprocessing.cleaner import clean_html
 from preprocessing.chunker import chunk_web_content, chunk_pdf_content
-from vectorstore.faiss_store import get_faiss_index, clear_faiss_index
+from vectorstore.faiss_store import INDEX_DIR, get_faiss_index, clear_faiss_index
 from rag.qa_chain import generate_answer
 from services.summarizer import get_summaries
 from utils.helpers import is_valid_url, export_chat_to_markdown, content_fingerprint
+
+
+def render_citations(citations):
+    """Render untrusted source metadata as plain text and only link HTTP(S) URLs."""
+    for cite in citations:
+        title = str(cite.get("title") or "Untitled source")
+        heading = str(cite.get("heading") or "Unlabelled section")
+        page = cite.get("page")
+        page_text = f", page {page}" if page else ""
+        with st.container():
+            st.text(f"{title} — {heading}{page_text}")
+            score = cite.get("semantic_similarity")
+            if isinstance(score, (int, float)):
+                st.caption(f"Semantic match: {score:.0%}")
+            source = str(cite.get("source") or "Unknown source")
+            if is_valid_url(source):
+                st.link_button("Open source", source)
+            else:
+                st.caption(f"Source: {source}")
+
 
 # Initialize session state so information stays available across Streamlit reruns.
 # This helps the app remember chat history, processed sources, and the FAISS database.
@@ -102,6 +122,8 @@ st.title("URL-Based Intelligent QA Assistant")
 # Description: Collects API keys, search settings, URLs, PDFs, and build actions.
 with st.sidebar:
     st.header("⚙️ Configuration")
+    if st.session_state.db is None and os.path.exists(os.path.join(INDEX_DIR, "index.pkl")) and not os.path.exists(os.path.join(INDEX_DIR, "store.json")):
+        st.warning("This local index uses an older pickle format and was not loaded for safety. Clear it, then re-add your sources.")
     
     # API Key Input
     api_key_input = st.text_input(
@@ -144,7 +166,14 @@ with st.sidebar:
     
     st.subheader("✂️ Chunking Parameters")
     chunk_size = st.slider("Chunk Size (characters)", min_value=200, max_value=2000, value=800, step=100)
-    chunk_overlap = st.slider("Chunk Overlap (characters)", min_value=0, max_value=500, value=150, step=50)
+    chunk_overlap = st.slider(
+        "Chunk Overlap (characters)",
+        min_value=0,
+        max_value=min(500, chunk_size - 1),
+        value=min(150, chunk_size - 1),
+        step=50,
+        help="Overlap preserves context between adjacent chunks and must remain smaller than the chunk size.",
+    )
 
     st.markdown("---")
     
@@ -170,13 +199,16 @@ with st.sidebar:
     
     # Clear index action
     if st.button("Clear Database . . . . "):
-        clear_faiss_index()
-        st.session_state.db = None
-        st.session_state.processed_urls.clear()
-        st.session_state.processed_files.clear()
-        st.session_state.chat_history.clear()
-        st.success("Database cleared!")
-        st.rerun()
+        try:
+            clear_faiss_index()
+            st.session_state.db = None
+            st.session_state.processed_urls.clear()
+            st.session_state.processed_files.clear()
+            st.session_state.chat_history.clear()
+            st.success("Database cleared!")
+            st.rerun()
+        except OSError as exc:
+            st.error(f"Could not completely clear the local database ({type(exc).__name__}).")
 
 # Header: Build knowledge base
 # Description: Process the entered URLs and uploaded PDFs into searchable chunks.
@@ -190,6 +222,9 @@ if build_db:
         st.sidebar.warning(f"Skipped invalid URLs: {', '.join(invalid_urls)}")
         
     all_documents = []
+    pending_urls = []
+    pending_files = {}
+    ingestion_errors = []
     
     # Process Web URLs
     if valid_urls:
@@ -197,12 +232,20 @@ if build_db:
             for url in valid_urls:
                 if url in st.session_state.processed_urls:
                     continue
-                content = load_url_content(url)
-                if content:
-                    sections = clean_html(content["html"])
-                    chunks = chunk_web_content(sections, url=url, title=content["title"], chunk_size=chunk_size, chunk_overlap=chunk_overlap)
-                    all_documents.extend(chunks)
-                    st.session_state.processed_urls.add(url)
+                try:
+                    content = load_url_content(url)
+                    if content:
+                        sections = clean_html(content["html"])
+                        chunks = chunk_web_content(sections, url=content["url"], title=content["title"], chunk_size=chunk_size, chunk_overlap=chunk_overlap)
+                        if chunks:
+                            all_documents.extend(chunks)
+                            pending_urls.append(url)
+                        else:
+                            ingestion_errors.append(f"No readable text found at {url}")
+                    else:
+                        ingestion_errors.append(f"Could not load {url}")
+                except Exception as exc:
+                    ingestion_errors.append(f"Could not process {url} ({type(exc).__name__})")
                     
     # Process Uploaded PDFs
     if uploaded_files:
@@ -213,20 +256,37 @@ if build_db:
                 if file_hash in st.session_state.processed_files:
                     continue
                 # Load PDF from bytes
-                pages_data = load_pdf_content(file_bytes, uploaded_file.name)
-                chunks = chunk_pdf_content(pages_data, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
-                if chunks:
-                    all_documents.extend(chunks)
-                    st.session_state.processed_files[file_hash] = uploaded_file.name
+                try:
+                    pages_data = load_pdf_content(file_bytes, uploaded_file.name)
+                    chunks = chunk_pdf_content(pages_data, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
+                    if chunks:
+                        all_documents.extend(chunks)
+                        pending_files[file_hash] = uploaded_file.name
+                    else:
+                        ingestion_errors.append(f"No extractable text found in {uploaded_file.name}")
+                except Exception as exc:
+                    ingestion_errors.append(f"Could not process {uploaded_file.name} ({type(exc).__name__})")
                 
     if all_documents:
-        with st.spinner("Generating embeddings & updating FAISS index..."):
-            db = get_faiss_index(all_documents)
+        try:
+            with st.spinner("Generating embeddings & updating FAISS index..."):
+                db = get_faiss_index(all_documents)
+            if db is None:
+                raise RuntimeError("index update returned no database")
             st.session_state.db = db
-        st.sidebar.success(f"Successfully processed {len(all_documents)} new chunks!")
-        st.rerun()
+            st.session_state.processed_urls.update(pending_urls)
+            st.session_state.processed_files.update(pending_files)
+            st.sidebar.success(f"Successfully processed {len(all_documents)} new chunks!")
+            if ingestion_errors:
+                st.sidebar.warning("Some sources were skipped. Check the source list and try those files/URLs again.")
+            st.rerun()
+        except Exception as exc:
+            st.sidebar.error(f"The knowledge base was not updated ({type(exc).__name__}). Your sources remain eligible for retry.")
     else:
-        st.sidebar.info("No new documents or URLs were added.")
+        if ingestion_errors:
+            st.sidebar.warning("No new documents were indexed. One or more sources could not be read; correct them and retry.")
+        else:
+            st.sidebar.info("No new documents or URLs were added.")
 
 # Header: Main content tabs
 # Description: Organize the app into source viewing, summaries, and chat.
@@ -250,14 +310,16 @@ with tab_sources:
         st.markdown("**Webpages:**")
         if st.session_state.processed_urls:
             for url in st.session_state.processed_urls:
-                st.markdown(f"- [{url}]({url})")
+                st.text(url)
+                if is_valid_url(url):
+                    st.link_button("Open webpage", url, key=f"source-{content_fingerprint(url.encode())[:12]}")
         else:
             st.info("No webpages loaded.")
     with col2:
         st.markdown("**PDF Documents:**")
         if st.session_state.processed_files:
             for filename in st.session_state.processed_files.values():
-                st.markdown(f"- 📄 {filename}")
+                st.text(f"PDF: {filename}")
         else:
             st.info("No PDF files uploaded.")
 
@@ -270,6 +332,11 @@ with tab_summary:
         if st.button("⚡ Generate Summaries"):
             with st.spinner("Analyzing sources and generating summaries..."):
                 summaries = get_summaries(st.session_state.db, temperature=temperature)
+            if summaries.get("error"):
+                st.error(summaries["error"])
+            else:
+                if summaries.get("coverage"):
+                    st.caption(summaries["coverage"])
                 st.markdown("### 📊 Executive Summary")
                 st.write(summaries["executive"])
                 st.markdown("---")
@@ -284,25 +351,10 @@ with tab_chat:
     # Display chat messages from history
     for message in st.session_state.chat_history:
         with st.chat_message(message["role"]):
-            st.markdown(message["content"])
-            if "citations" in message and message["citations"]:
-                with st.expander("🔍 Show Source Citations"):
-                    for cite in message["citations"]:
-                        title = cite.get("title", "N/A")
-                        heading = cite.get("heading", "N/A")
-                        page = cite.get("page", "")
-                        page_str = f", Page {page}" if page else ""
-                        similarity = cite.get("semantic_similarity")
-                        similarity_str = f"Semantic match: {similarity:.0%}<br>" if isinstance(similarity, (int, float)) else ""
-                        source = cite.get("source", "N/A")
-                        st.markdown(
-                            f"<div class='citation-card'>"
-                            f"<strong>{title}</strong> (Section: {heading}{page_str})<br>"
-                            f"{similarity_str}"
-                            f"Source: <a href='{source}' target='_blank'>{source}</a>"
-                            f"</div>",
-                            unsafe_allow_html=True
-                        )
+                st.markdown(message["content"])
+                if "citations" in message and message["citations"]:
+                    with st.expander("🔍 Show Source Citations"):
+                        render_citations(message["citations"])
 
     # Chat input
     if question := st.chat_input("Ask a question about the provided sources..."):
@@ -322,16 +374,19 @@ with tab_chat:
             with st.chat_message("assistant"):
                 message_placeholder = st.empty()
                 with st.spinner("Searching knowledge base and thinking..."):
-                    answer, retrieved_docs = generate_answer(
-                        question=question,
-                        db=st.session_state.db,
-                        chat_history=st.session_state.chat_history[:-1], # Exclude current question
-                        strict=strict_mode,
-                        k=top_k,
-                        temperature=temperature,
-                        search_type=search_type,
-                        min_similarity=min_similarity,
-                    )
+                    try:
+                        answer, retrieved_docs = generate_answer(
+                            question=question,
+                            db=st.session_state.db,
+                            chat_history=st.session_state.chat_history[:-1], # Exclude current question
+                            strict=strict_mode,
+                            k=top_k,
+                            temperature=temperature,
+                            search_type=search_type,
+                            min_similarity=min_similarity,
+                        )
+                    except Exception as exc:
+                        answer, retrieved_docs = f"I couldn't complete that request ({type(exc).__name__}). Please try again.", []
                     
                     message_placeholder.markdown(answer)
                     
@@ -339,7 +394,7 @@ with tab_chat:
                     citations = []
                     seen_citations = set()
                     for doc in retrieved_docs:
-                        key = (doc.metadata.get("title"), doc.metadata.get("heading"), doc.metadata.get("page"))
+                        key = (doc.metadata.get("source"), doc.metadata.get("title"), doc.metadata.get("heading"), doc.metadata.get("page"))
                         if key not in seen_citations:
                             seen_citations.add(key)
                             citations.append({
@@ -353,22 +408,7 @@ with tab_chat:
                     # Show citations below answer
                     if citations:
                         with st.expander("🔍 Show Source Citations"):
-                            for cite in citations:
-                                title = cite["title"]
-                                heading = cite["heading"]
-                                page = cite["page"]
-                                page_str = f", Page {page}" if page else ""
-                                similarity = cite.get("semantic_similarity")
-                                similarity_str = f"Semantic match: {similarity:.0%}<br>" if isinstance(similarity, (int, float)) else ""
-                                source = cite["source"]
-                                st.markdown(
-                                    f"<div class='citation-card'>"
-                                    f"<strong>{title}</strong> (Section: {heading}{page_str})<br>"
-                                    f"{similarity_str}"
-                                    f"Source: <a href='{source}' target='_blank'>{source}</a>"
-                                    f"</div>",
-                                    unsafe_allow_html=True
-                                )
+                            render_citations(citations)
                                 
             # Add assistant message to history
             st.session_state.chat_history.append({
